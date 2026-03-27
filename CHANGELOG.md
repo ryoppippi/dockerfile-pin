@@ -1,5 +1,7 @@
 # Changelog
 
+## [v1.0.1](https://github.com/azu/dockerfile-pin/compare/v1.0.0...v1.0.1) - 2026-03-27
+
 ## [v0.0.7](https://github.com/azu/dockerfile-pin/compare/v0.0.6...v0.0.7) - 2026-03-27
 
 ## [v0.0.6](https://github.com/azu/dockerfile-pin/compare/v0.0.5...v0.0.6) - 2026-03-27
