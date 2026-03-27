@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/azu/dockerfile-pin/internal/compose"
 	"github.com/azu/dockerfile-pin/internal/dockerfile"
@@ -43,10 +44,13 @@ func runRun(cmd *cobra.Command, args []string) error {
 	}
 
 	dryRun := !runWrite
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
 	res := &resolver.CraneResolver{}
 
-	for _, filePath := range files {
+	fmt.Fprintf(os.Stderr, "found %d file(s)\n", len(files))
+	for i, filePath := range files {
+		fmt.Fprintf(os.Stderr, "[%d/%d] %s\n", i+1, len(files), filePath)
 		var err error
 		switch DetectFileType(filePath) {
 		case FileTypeCompose:

@@ -3,6 +3,7 @@ package resolver
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -16,12 +17,16 @@ type DigestResolver interface {
 
 type CraneResolver struct{}
 
+const perRequestTimeout = 30 * time.Second
+
 func (r *CraneResolver) Resolve(ctx context.Context, imageRef string) (string, error) {
 	ref, err := name.ParseReference(imageRef)
 	if err != nil {
 		return "", fmt.Errorf("parsing reference %q: %w", imageRef, err)
 	}
-	desc, err := remote.Head(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(ctx))
+	reqCtx, cancel := context.WithTimeout(ctx, perRequestTimeout)
+	defer cancel()
+	desc, err := remote.Head(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(reqCtx))
 	if err != nil {
 		return "", fmt.Errorf("resolving digest for %q: %w", imageRef, err)
 	}
@@ -33,7 +38,9 @@ func (r *CraneResolver) Exists(ctx context.Context, imageRef string) (bool, erro
 	if err != nil {
 		return false, fmt.Errorf("parsing reference %q: %w", imageRef, err)
 	}
-	_, err = remote.Head(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(ctx))
+	reqCtx, cancel := context.WithTimeout(ctx, perRequestTimeout)
+	defer cancel()
+	_, err = remote.Head(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(reqCtx))
 	if err != nil {
 		return false, nil
 	}
