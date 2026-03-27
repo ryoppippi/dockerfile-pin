@@ -1,0 +1,16 @@
+services:
+  web:
+    image: node:20.11.1
+    ports:
+      - "3000:3000"
+  db:
+    image: postgres:16.2
+    environment:
+      POSTGRES_PASSWORD: secret
+  worker:
+    image: python:3.12-slim
+  app:
+    build: .
+    image: myapp:latest
+  pinned:
+    image: node:20.11.1@sha256:d938c1761e3afbae9242848ffbb95b9cc1cb0a24d889f8bd955204d347a7266e
