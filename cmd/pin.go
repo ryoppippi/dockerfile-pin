@@ -26,14 +26,16 @@ var (
 	runWrite    bool
 	runUpdate   bool
 	runPlatform string
+	runVerbose  bool
 )
 
 func init() {
-	runCmd.Flags().StringVarP(&runFilePath, "file", "f", "", "Dockerfile path (default: ./Dockerfile)")
+	runCmd.Flags().StringVarP(&runFilePath, "file", "f", "", "Dockerfile path (default: auto-detect)")
 	runCmd.Flags().StringVar(&runGlob, "glob", "", "Glob pattern to find Dockerfiles")
 	runCmd.Flags().BoolVar(&runWrite, "write", false, "Write changes to files (default is dry-run)")
 	runCmd.Flags().BoolVar(&runUpdate, "update", false, "Update existing digests")
 	runCmd.Flags().StringVar(&runPlatform, "platform", "", "Platform for multi-arch images (e.g., linux/amd64)")
+	runCmd.Flags().BoolVarP(&runVerbose, "verbose", "v", false, "Show progress details")
 	rootCmd.AddCommand(runCmd)
 }
 
@@ -48,9 +50,13 @@ func runRun(cmd *cobra.Command, args []string) error {
 	defer cancel()
 	res := &resolver.CraneResolver{}
 
-	fmt.Fprintf(os.Stderr, "found %d file(s)\n", len(files))
+	if runVerbose {
+		fmt.Fprintf(os.Stderr, "found %d file(s)\n", len(files))
+	}
 	for i, filePath := range files {
-		fmt.Fprintf(os.Stderr, "[%d/%d] %s\n", i+1, len(files), filePath)
+		if runVerbose {
+			fmt.Fprintf(os.Stderr, "[%d/%d] %s\n", i+1, len(files), filePath)
+		}
 		var err error
 		switch DetectFileType(filePath) {
 		case FileTypeCompose:
