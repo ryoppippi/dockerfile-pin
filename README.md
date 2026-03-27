@@ -158,11 +158,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install dockerfile-pin
-        run: |
-          curl -sL "https://github.com/azu/dockerfile-pin/releases/latest/download/dockerfile-pin_linux_amd64.tar.gz" | tar xz
-          sudo mv dockerfile-pin /usr/local/bin/
+      - uses: aquaproj/aqua-installer@v3
+        with:
+          aqua_version: v2.45.0
       - run: dockerfile-pin check
+```
+
+This requires `dockerfile-pin` in your `aqua.yaml`:
+
+```yaml
+registries:
+  - type: github_content
+    repo_owner: azu
+    repo_name: dockerfile-pin
+    ref: main
+    path: registry.yaml
+packages:
+  - name: azu/dockerfile-pin
+    version: v0.0.7
 ```
 
 `dockerfile-pin check` exits with code 1 if any image is missing a digest.
