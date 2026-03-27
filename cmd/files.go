@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +26,33 @@ func DetectFileType(path string) FileType {
 	return FileTypeDockerfile
 }
 
+var skipDirs = map[string]bool{
+	".git":         true,
+	".claude":      true,
+	"node_modules": true,
+	"vendor":       true,
+	".terraform":   true,
+	"dist":         true,
+	".next":        true,
+}
+
+func isTargetFile(name string) bool {
+	lower := strings.ToLower(name)
+	if lower == "dockerfile" {
+		return true
+	}
+	if strings.HasPrefix(lower, "dockerfile.") && !strings.HasSuffix(lower, ".go") && !strings.HasSuffix(lower, ".md") {
+		return true
+	}
+	if strings.HasPrefix(lower, "docker-compose") && (strings.HasSuffix(lower, ".yml") || strings.HasSuffix(lower, ".yaml")) {
+		return true
+	}
+	if lower == "compose.yml" || lower == "compose.yaml" {
+		return true
+	}
+	return false
+}
+
 func FindFiles(filePath string, globPattern string) ([]string, error) {
 	if filePath != "" {
 		if _, err := os.Stat(filePath); err != nil {
@@ -42,22 +70,25 @@ func FindFiles(filePath string, globPattern string) ([]string, error) {
 		}
 		return matches, nil
 	}
-	// Default: recursively find all Dockerfiles and compose files
+	// Default: walk directory tree, skip heavy dirs
 	var allMatches []string
-	patterns := []string{
-		"**/Dockerfile",
-		"**/Dockerfile.*",
-		"**/docker-compose*.yml",
-		"**/docker-compose*.yaml",
-		"**/compose.yml",
-		"**/compose.yaml",
-	}
-	for _, p := range patterns {
-		matches, err := doublestar.FilepathGlob(p)
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			continue
+			return nil
 		}
-		allMatches = append(allMatches, matches...)
+		if d.IsDir() {
+			if skipDirs[d.Name()] {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isTargetFile(d.Name()) {
+			allMatches = append(allMatches, path)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking directory: %w", err)
 	}
 	if len(allMatches) == 0 {
 		return nil, fmt.Errorf("no Dockerfiles or compose files found")

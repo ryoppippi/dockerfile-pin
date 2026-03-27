@@ -78,3 +78,34 @@ func TestFindFiles_DefaultRecursive(t *testing.T) {
 		t.Errorf("FindFiles() returned %d files, want 3: %v", len(files), files)
 	}
 }
+
+func TestFindFiles_SkipsNodeModules(t *testing.T) {
+	dir := t.TempDir()
+	nm := filepath.Join(dir, "node_modules", "pkg")
+	if err := os.MkdirAll(nm, 0755); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{
+		filepath.Join(dir, "Dockerfile"),
+		filepath.Join(nm, "Dockerfile"),
+	} {
+		if err := os.WriteFile(p, []byte("FROM node:20"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	origDir, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(origDir) }()
+	files, err := FindFiles("", "")
+	if err != nil {
+		t.Fatalf("FindFiles() error = %v", err)
+	}
+	if len(files) != 1 {
+		t.Errorf("FindFiles() returned %d files, want 1 (node_modules should be skipped): %v", len(files), files)
+	}
+}
