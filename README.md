@@ -149,6 +149,8 @@ Exit code is `1` when any check fails (configurable with `--exit-code`).
 
 Validate that all images are pinned on every pull request.
 
+With aqua (if your project already uses aqua):
+
 ```yaml
 # .github/workflows/dockerfile-check.yml
 name: Dockerfile Digest Check
@@ -164,18 +166,21 @@ jobs:
       - run: dockerfile-pin check
 ```
 
-This requires `dockerfile-pin` in your `aqua.yaml`:
+Without aqua:
 
 ```yaml
-registries:
-  - type: github_content
-    repo_owner: azu
-    repo_name: dockerfile-pin
-    ref: main
-    path: registry.yaml
-packages:
-  - name: azu/dockerfile-pin
-    version: v0.0.7
+# .github/workflows/dockerfile-check.yml
+name: Dockerfile Digest Check
+on: [pull_request]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dockerfile-pin
+        run: |
+          curl -sL "https://github.com/azu/dockerfile-pin/releases/latest/download/dockerfile-pin_linux_amd64.tar.gz" | tar xz -C /usr/local/bin
+      - run: dockerfile-pin check
 ```
 
 `dockerfile-pin check` exits with code 1 if any image is missing a digest.
