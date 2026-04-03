@@ -4,7 +4,7 @@ A CLI tool that adds `@sha256:<digest>` to `FROM` lines in Dockerfiles, `image` 
 
 ## Install
 
-### Homebrew / curl
+### curl
 
 ```bash
 # Download binary (macOS Apple Silicon)
@@ -16,7 +16,7 @@ curl -sL "https://github.com/azu/dockerfile-pin/releases/latest/download/dockerf
 sudo mv dockerfile-pin /usr/local/bin/
 ```
 
-### aqua
+### [aqua](https://aquaproj.github.io/)
 
 ```bash
 aqua init
