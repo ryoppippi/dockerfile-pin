@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/azu/dockerfile-pin/internal/actions"
 	"github.com/azu/dockerfile-pin/internal/dockerfile"
 	"github.com/azu/dockerfile-pin/internal/resolver"
 )
@@ -193,5 +194,373 @@ func TestRealWorldPatterns(t *testing.T) {
 		if instructions[e.idx].ImageRef != e.imageRef {
 			t.Errorf("[%d] ImageRef = %q, want %q", e.idx, instructions[e.idx].ImageRef, e.imageRef)
 		}
+	}
+}
+
+func TestPinWorkflowEndToEnd(t *testing.T) {
+	input := `name: CI
+on: push
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    container:
+      image: node:24
+    services:
+      db:
+        image: postgres:18
+    steps:
+      - uses: docker://ghcr.io/foo/bar:latest
+      - uses: actions/checkout@v4
+`
+	expected := `name: CI
+on: push
+jobs:
+  sample:
+    runs-on: ubuntu-latest
+    container:
+      image: node:24@sha256:aaa111
+    services:
+      db:
+        image: postgres:18@sha256:bbb222
+    steps:
+      - uses: docker://ghcr.io/foo/bar:latest@sha256:ccc333
+      - uses: actions/checkout@v4
+`
+	mock := &resolver.MockResolver{
+		Digests: map[string]string{
+			"node:24":                "sha256:aaa111",
+			"postgres:18":            "sha256:bbb222",
+			"ghcr.io/foo/bar:latest": "sha256:ccc333",
+		},
+	}
+
+	refs, err := actions.Parse([]byte(input))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	ctx := context.Background()
+	digests := make(map[int]string)
+	for i, ref := range refs {
+		if ref.Skip || ref.Digest != "" {
+			continue
+		}
+		digest, err := mock.Resolve(ctx, ref.ImageRef)
+		if err != nil {
+			t.Logf("skipping %s: %v", ref.ImageRef, err)
+			continue
+		}
+		digests[i] = digest
+	}
+
+	result := actions.RewriteFile(input, refs, digests)
+
+	if result != expected {
+		t.Errorf("unexpected output:\n--- got ---\n%s\n--- want ---\n%s", result, expected)
+	}
+}
+
+func TestPinWorkflowDockerPrefixEndToEnd(t *testing.T) {
+	input := `name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: docker://node:24
+    services:
+      db:
+        image: docker://postgres:18
+    steps:
+      - uses: docker://alpine:3.19
+`
+	expected := `name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: docker://node:24@sha256:aaa111
+    services:
+      db:
+        image: docker://postgres:18@sha256:bbb222
+    steps:
+      - uses: docker://alpine:3.19@sha256:ccc333
+`
+	mock := &resolver.MockResolver{
+		Digests: map[string]string{
+			"node:24":     "sha256:aaa111",
+			"postgres:18": "sha256:bbb222",
+			"alpine:3.19": "sha256:ccc333",
+		},
+	}
+
+	refs, err := actions.Parse([]byte(input))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	// Verify docker:// is stripped from ImageRef before resolve
+	for _, ref := range refs {
+		if strings.HasPrefix(ref.ImageRef, "docker://") {
+			t.Errorf("ImageRef should not contain docker:// prefix: %q", ref.ImageRef)
+		}
+	}
+
+	ctx := context.Background()
+	digests := make(map[int]string)
+	for i, ref := range refs {
+		if ref.Skip || ref.Digest != "" {
+			continue
+		}
+		digest, err := mock.Resolve(ctx, ref.ImageRef)
+		if err != nil {
+			t.Fatalf("Resolve(%s) error = %v — docker:// prefix may not have been stripped", ref.ImageRef, err)
+		}
+		digests[i] = digest
+	}
+
+	result := actions.RewriteFile(input, refs, digests)
+
+	if result != expected {
+		t.Errorf("unexpected output:\n--- got ---\n%s\n--- want ---\n%s", result, expected)
+	}
+}
+
+func TestPinActionEndToEnd(t *testing.T) {
+	input := `name: My Action
+description: Custom action
+runs:
+  using: docker
+  image: docker://debian:stretch-slim
+`
+	expected := `name: My Action
+description: Custom action
+runs:
+  using: docker
+  image: docker://debian:stretch-slim@sha256:ddd444
+`
+	mock := &resolver.MockResolver{
+		Digests: map[string]string{
+			"debian:stretch-slim": "sha256:ddd444",
+		},
+	}
+
+	refs, err := actions.Parse([]byte(input))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	ctx := context.Background()
+	digests := make(map[int]string)
+	for i, ref := range refs {
+		if ref.Skip || ref.Digest != "" {
+			continue
+		}
+		digest, err := mock.Resolve(ctx, ref.ImageRef)
+		if err != nil {
+			t.Logf("skipping %s: %v", ref.ImageRef, err)
+			continue
+		}
+		digests[i] = digest
+	}
+
+	result := actions.RewriteFile(input, refs, digests)
+
+	if result != expected {
+		t.Errorf("unexpected output:\n--- got ---\n%s\n--- want ---\n%s", result, expected)
+	}
+}
+
+func TestCheckWorkflowEndToEnd(t *testing.T) {
+	input := `name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: node:24
+    services:
+      db:
+        image: postgres:18@sha256:validdigest
+    steps:
+      - uses: docker://ghcr.io/foo/bar:latest@sha256:invaliddigest
+`
+	mock := &resolver.MockResolver{
+		Digests: map[string]string{
+			"postgres:18@sha256:validdigest": "sha256:validdigest",
+		},
+	}
+
+	refs, err := actions.Parse([]byte(input))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	ctx := context.Background()
+	type checkResult struct {
+		imageRef string
+		status   string
+	}
+	var results []checkResult
+
+	for _, ref := range refs {
+		if ref.Skip {
+			results = append(results, checkResult{ref.ImageRef, "skip"})
+			continue
+		}
+		if ref.Digest == "" {
+			results = append(results, checkResult{ref.ImageRef, "fail-missing"})
+			continue
+		}
+		fullRef := ref.ImageRef + "@" + ref.Digest
+		exists, _ := mock.Exists(ctx, fullRef)
+		if exists {
+			results = append(results, checkResult{ref.ImageRef, "ok"})
+		} else {
+			results = append(results, checkResult{ref.ImageRef, "fail-notfound"})
+		}
+	}
+
+	expected := []checkResult{
+		{"node:24", "fail-missing"},
+		{"postgres:18", "ok"},
+		{"ghcr.io/foo/bar:latest", "fail-notfound"},
+	}
+
+	if len(results) != len(expected) {
+		t.Fatalf("expected %d results, got %d: %+v", len(expected), len(results), results)
+	}
+	for i, want := range expected {
+		if results[i] != want {
+			t.Errorf("[%d] got %+v, want %+v", i, results[i], want)
+		}
+	}
+}
+
+func TestPinWorkflow_AlreadyPinned(t *testing.T) {
+	input := `name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: node:24@sha256:existingdigest
+    steps:
+      - uses: docker://ghcr.io/foo/bar:latest@sha256:existingdigest2
+`
+	mock := &resolver.MockResolver{
+		Digests: map[string]string{
+			"node:24":                "sha256:newdigest",
+			"ghcr.io/foo/bar:latest": "sha256:newdigest2",
+		},
+	}
+
+	refs, err := actions.Parse([]byte(input))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	// Without --update: skip already-pinned (output should be identical to input)
+	ctx := context.Background()
+	digests := make(map[int]string)
+	for i, ref := range refs {
+		if ref.Skip || ref.Digest != "" {
+			continue
+		}
+		digest, err := mock.Resolve(ctx, ref.ImageRef)
+		if err != nil {
+			continue
+		}
+		digests[i] = digest
+	}
+
+	result := actions.RewriteFile(input, refs, digests)
+	if result != input {
+		t.Errorf("without --update, output should be identical to input:\n--- got ---\n%s\n--- want ---\n%s", result, input)
+	}
+
+	// With --update: resolve all
+	expectedUpdated := `name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: node:24@sha256:newdigest
+    steps:
+      - uses: docker://ghcr.io/foo/bar:latest@sha256:newdigest2
+`
+	digests2 := make(map[int]string)
+	for i, ref := range refs {
+		if ref.Skip {
+			continue
+		}
+		digest, err := mock.Resolve(ctx, ref.ImageRef)
+		if err != nil {
+			continue
+		}
+		digests2[i] = digest
+	}
+
+	result2 := actions.RewriteFile(input, refs, digests2)
+	if result2 != expectedUpdated {
+		t.Errorf("with --update, unexpected output:\n--- got ---\n%s\n--- want ---\n%s", result2, expectedUpdated)
+	}
+}
+
+func TestPinWorkflowFileRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ci.yml")
+	content := `name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: node:24
+    services:
+      db:
+        image: postgres:18
+    steps:
+      - uses: docker://alpine:3.19
+`
+	expected := `name: CI
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: node:24@sha256:aaa
+    services:
+      db:
+        image: postgres:18@sha256:bbb
+    steps:
+      - uses: docker://alpine:3.19@sha256:ccc
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	refs, err := actions.Parse([]byte(content))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	digests := map[int]string{
+		0: "sha256:aaa",
+		1: "sha256:bbb",
+		2: "sha256:ccc",
+	}
+	result := actions.RewriteFile(content, refs, digests)
+
+	if err := os.WriteFile(path, []byte(result), 0644); err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(written) != expected {
+		t.Errorf("round-trip failed:\n--- got ---\n%s\n--- want ---\n%s", string(written), expected)
 	}
 }

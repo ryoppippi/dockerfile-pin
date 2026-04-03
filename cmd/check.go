@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/azu/dockerfile-pin/internal/actions"
 	"github.com/azu/dockerfile-pin/internal/compose"
 	"github.com/azu/dockerfile-pin/internal/dockerfile"
 	"github.com/azu/dockerfile-pin/internal/resolver"
@@ -71,6 +72,8 @@ func runCheck(cmd *cobra.Command, args []string) error {
 		switch DetectFileType(filePath) {
 		case FileTypeCompose:
 			fileResults, err = parseComposeForCheck(filePath, checkSyntaxOnly, checkIgnore)
+		case FileTypeActions:
+			fileResults, err = parseActionsForCheck(filePath, checkSyntaxOnly, checkIgnore)
 		default:
 			fileResults, err = parseDockerfileForCheck(filePath, checkSyntaxOnly, checkIgnore)
 		}
@@ -252,6 +255,67 @@ func parseComposeForCheck(filePath string, syntaxOnly bool, ignoreImages []strin
 		})
 	}
 	return results, nil
+}
+
+func parseActionsForCheck(filePath string, syntaxOnly bool, ignoreImages []string) ([]CheckResult, error) {
+	content, err := os.ReadFile(filePath)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", filePath, err)
+	}
+	refs, err := actions.Parse(content)
+	if err != nil {
+		return nil, fmt.Errorf("parsing %s: %w", filePath, err)
+	}
+	var results []CheckResult
+	for _, ref := range refs {
+		// Build Original with YAML key prefix for consistent output
+		// Location ends with the key name (e.g., "jobs.test.container.image" → "image")
+		original := actionsOriginal(ref)
+		if ref.Skip {
+			results = append(results, CheckResult{
+				File: filePath, Line: ref.Line, Image: ref.ImageRef,
+				Status: "skip", Message: ref.SkipReason, Original: original,
+			})
+			continue
+		}
+		if isIgnored(ref.ImageRef, ignoreImages) {
+			results = append(results, CheckResult{
+				File: filePath, Line: ref.Line, Image: ref.ImageRef,
+				Status: "skip", Message: "ignored", Original: original,
+			})
+			continue
+		}
+		if ref.Digest == "" {
+			results = append(results, CheckResult{
+				File: filePath, Line: ref.Line, Image: ref.ImageRef,
+				Status: "fail", Message: "missing digest", Original: original,
+			})
+			continue
+		}
+		if syntaxOnly {
+			results = append(results, CheckResult{
+				File: filePath, Line: ref.Line, Image: ref.ImageRef,
+				Status: "ok", Message: "", Original: original,
+			})
+			continue
+		}
+		results = append(results, CheckResult{
+			File: filePath, Line: ref.Line, Image: ref.ImageRef,
+			Status: "pending", Message: ref.Digest, Original: original,
+		})
+	}
+	return results, nil
+}
+
+// actionsOriginal returns a human-readable "key: value" string for check output,
+// matching the compose convention (e.g., "image: node:24", "uses: docker://...").
+func actionsOriginal(ref actions.ActionsImageRef) string {
+	loc := ref.Location
+	if idx := strings.LastIndex(loc, "."); idx >= 0 {
+		key := loc[idx+1:]
+		return key + ": " + ref.RawRef
+	}
+	return ref.RawRef
 }
 
 func isIgnored(imageRef string, patterns []string) bool {
