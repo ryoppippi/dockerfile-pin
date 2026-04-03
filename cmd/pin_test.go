@@ -34,7 +34,12 @@ func TestApplyDockerfile_UpdateExistingDigest(t *testing.T) {
 		"python:3.12-slim": "sha256:newdigest222",
 	}
 
-	applyDockerfile(pf, digestMap, false, true)
+	refs := dockerfileToImageRefs(instructions)
+	digests := buildDigestMap(refs, digestMap, true)
+	rewriteFn := func(content string, digests map[int]string) string {
+		return dockerfile.RewriteFile(content, instructions, digests)
+	}
+	applyFile(pf, digests, rewriteFn, false)
 
 	result, err := os.ReadFile(path)
 	if err != nil {
@@ -74,7 +79,12 @@ func TestApplyDockerfile_SkipExistingDigestWithoutUpdate(t *testing.T) {
 		"golang:1.22":  "sha256:ccc333",
 	}
 
-	applyDockerfile(pf, digestMap, false, false)
+	refs := dockerfileToImageRefs(instructions)
+	digests := buildDigestMap(refs, digestMap, false)
+	rewriteFn := func(content string, digests map[int]string) string {
+		return dockerfile.RewriteFile(content, instructions, digests)
+	}
+	applyFile(pf, digests, rewriteFn, false)
 
 	result, err := os.ReadFile(path)
 	if err != nil {

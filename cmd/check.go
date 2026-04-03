@@ -67,16 +67,7 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	var allResults []CheckResult
 	var needsCheck []int // indices into allResults that need registry verification
 	for _, filePath := range files {
-		var fileResults []CheckResult
-		var err error
-		switch DetectFileType(filePath) {
-		case FileTypeCompose:
-			fileResults, err = parseComposeForCheck(filePath, checkSyntaxOnly, checkIgnore)
-		case FileTypeActions:
-			fileResults, err = parseActionsForCheck(filePath, checkSyntaxOnly, checkIgnore)
-		default:
-			fileResults, err = parseDockerfileForCheck(filePath, checkSyntaxOnly, checkIgnore)
-		}
+		fileResults, err := parseFileForCheck(filePath, checkSyntaxOnly, checkIgnore)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error processing %s: %v\n", filePath, err)
 			continue
@@ -156,155 +147,78 @@ func runCheck(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// parseDockerfileForCheck parses a Dockerfile and returns CheckResults.
+// parseFileForCheck reads a file, parses it based on type, and returns CheckResults.
 // Results that need registry verification have Status="pending" and Message=digest.
-func parseDockerfileForCheck(filePath string, syntaxOnly bool, ignoreImages []string) ([]CheckResult, error) {
+func parseFileForCheck(filePath string, syntaxOnly bool, ignoreImages []string) ([]CheckResult, error) {
 	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", filePath, err)
 	}
 
-	instructions, err := dockerfile.Parse(strings.NewReader(string(content)))
-	if err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", filePath, err)
+	var refs []imageReference
+	switch DetectFileType(filePath) {
+	case FileTypeCompose:
+		crefs, err := compose.Parse(content)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", filePath, err)
+		}
+		refs = composeToImageRefs(crefs)
+	case FileTypeActions:
+		arefs, err := actions.Parse(content)
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", filePath, err)
+		}
+		refs = actionsToImageRefs(arefs)
+	default:
+		insts, err := dockerfile.Parse(strings.NewReader(string(content)))
+		if err != nil {
+			return nil, fmt.Errorf("parsing %s: %w", filePath, err)
+		}
+		refs = dockerfileToImageRefs(insts)
 	}
 
+	return buildCheckResults(filePath, refs, syntaxOnly, ignoreImages), nil
+}
+
+// buildCheckResults converts a slice of imageReference into CheckResults.
+func buildCheckResults(filePath string, refs []imageReference, syntaxOnly bool, ignoreImages []string) []CheckResult {
 	var results []CheckResult
-	for _, inst := range instructions {
-		if inst.Skip {
+	for _, ref := range refs {
+		if ref.Skip {
 			results = append(results, CheckResult{
-				File: filePath, Line: inst.StartLine, Image: inst.ImageRef,
-				Status: "skip", Message: inst.SkipReason, Original: inst.Original,
+				File: filePath, Line: ref.Line, Image: ref.ImageRef,
+				Status: "skip", Message: ref.SkipReason, Original: ref.Original,
 			})
 			continue
 		}
-		if isIgnored(inst.ImageRef, ignoreImages) {
+		if isIgnored(ref.ImageRef, ignoreImages) {
 			results = append(results, CheckResult{
-				File: filePath, Line: inst.StartLine, Image: inst.ImageRef,
-				Status: "skip", Message: "ignored", Original: inst.Original,
+				File: filePath, Line: ref.Line, Image: ref.ImageRef,
+				Status: "skip", Message: "ignored", Original: ref.Original,
 			})
 			continue
 		}
-		if inst.Digest == "" {
+		if ref.Digest == "" {
 			results = append(results, CheckResult{
-				File: filePath, Line: inst.StartLine, Image: inst.ImageRef,
-				Status: "fail", Message: "missing digest", Original: inst.Original,
+				File: filePath, Line: ref.Line, Image: ref.ImageRef,
+				Status: "fail", Message: "missing digest", Original: ref.Original,
 			})
 			continue
 		}
 		if syntaxOnly {
 			results = append(results, CheckResult{
-				File: filePath, Line: inst.StartLine, Image: inst.ImageRef,
-				Status: "ok", Message: "", Original: inst.Original,
+				File: filePath, Line: ref.Line, Image: ref.ImageRef,
+				Status: "ok", Message: "", Original: ref.Original,
 			})
 			continue
 		}
 		// Needs registry check: store digest in Message temporarily
 		results = append(results, CheckResult{
-			File: filePath, Line: inst.StartLine, Image: inst.ImageRef,
-			Status: "pending", Message: inst.Digest, Original: inst.Original,
-		})
-	}
-	return results, nil
-}
-
-// parseComposeForCheck parses a compose file and returns CheckResults.
-// Results that need registry verification have Status="pending" and Message=digest.
-func parseComposeForCheck(filePath string, syntaxOnly bool, ignoreImages []string) ([]CheckResult, error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", filePath, err)
-	}
-	refs, err := compose.Parse(content)
-	if err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", filePath, err)
-	}
-	var results []CheckResult
-	for _, ref := range refs {
-		if ref.Skip {
-			results = append(results, CheckResult{
-				File: filePath, Line: ref.Line, Image: ref.ImageRef,
-				Status: "skip", Message: ref.SkipReason, Original: "image: " + ref.RawRef,
-			})
-			continue
-		}
-		if isIgnored(ref.ImageRef, ignoreImages) {
-			results = append(results, CheckResult{
-				File: filePath, Line: ref.Line, Image: ref.ImageRef,
-				Status: "skip", Message: "ignored", Original: "image: " + ref.RawRef,
-			})
-			continue
-		}
-		if ref.Digest == "" {
-			results = append(results, CheckResult{
-				File: filePath, Line: ref.Line, Image: ref.ImageRef,
-				Status: "fail", Message: "missing digest", Original: "image: " + ref.RawRef,
-			})
-			continue
-		}
-		if syntaxOnly {
-			results = append(results, CheckResult{
-				File: filePath, Line: ref.Line, Image: ref.ImageRef,
-				Status: "ok", Message: "", Original: "image: " + ref.RawRef,
-			})
-			continue
-		}
-		results = append(results, CheckResult{
 			File: filePath, Line: ref.Line, Image: ref.ImageRef,
-			Status: "pending", Message: ref.Digest, Original: "image: " + ref.RawRef,
+			Status: "pending", Message: ref.Digest, Original: ref.Original,
 		})
 	}
-	return results, nil
-}
-
-func parseActionsForCheck(filePath string, syntaxOnly bool, ignoreImages []string) ([]CheckResult, error) {
-	content, err := os.ReadFile(filePath)
-	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", filePath, err)
-	}
-	refs, err := actions.Parse(content)
-	if err != nil {
-		return nil, fmt.Errorf("parsing %s: %w", filePath, err)
-	}
-	var results []CheckResult
-	for _, ref := range refs {
-		// Build Original with YAML key prefix for consistent output
-		// Location ends with the key name (e.g., "jobs.test.container.image" → "image")
-		original := actionsOriginal(ref)
-		if ref.Skip {
-			results = append(results, CheckResult{
-				File: filePath, Line: ref.Line, Image: ref.ImageRef,
-				Status: "skip", Message: ref.SkipReason, Original: original,
-			})
-			continue
-		}
-		if isIgnored(ref.ImageRef, ignoreImages) {
-			results = append(results, CheckResult{
-				File: filePath, Line: ref.Line, Image: ref.ImageRef,
-				Status: "skip", Message: "ignored", Original: original,
-			})
-			continue
-		}
-		if ref.Digest == "" {
-			results = append(results, CheckResult{
-				File: filePath, Line: ref.Line, Image: ref.ImageRef,
-				Status: "fail", Message: "missing digest", Original: original,
-			})
-			continue
-		}
-		if syntaxOnly {
-			results = append(results, CheckResult{
-				File: filePath, Line: ref.Line, Image: ref.ImageRef,
-				Status: "ok", Message: "", Original: original,
-			})
-			continue
-		}
-		results = append(results, CheckResult{
-			File: filePath, Line: ref.Line, Image: ref.ImageRef,
-			Status: "pending", Message: ref.Digest, Original: original,
-		})
-	}
-	return results, nil
+	return results
 }
 
 // actionsOriginal returns a human-readable "key: value" string for check output,

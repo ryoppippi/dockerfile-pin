@@ -90,14 +90,26 @@ func runRun(cmd *cobra.Command, args []string) error {
 
 	// Phase 3: Apply digests and output results
 	for _, pf := range parsed {
+		var refs []imageReference
+		var rewriteFn func(string, map[int]string) string
 		switch pf.fileType {
 		case FileTypeCompose:
-			applyCompose(pf, digestMap, dryRun, runUpdate)
+			refs = composeToImageRefs(pf.composeRefs)
+			rewriteFn = func(content string, digests map[int]string) string {
+				return compose.RewriteFile(content, pf.composeRefs, digests)
+			}
 		case FileTypeActions:
-			applyActions(pf, digestMap, dryRun, runUpdate)
+			refs = actionsToImageRefs(pf.actionsRefs)
+			rewriteFn = func(content string, digests map[int]string) string {
+				return actions.RewriteFile(content, pf.actionsRefs, digests)
+			}
 		default:
-			applyDockerfile(pf, digestMap, dryRun, runUpdate)
+			refs = dockerfileToImageRefs(pf.dockerInsts)
+			rewriteFn = func(content string, digests map[int]string) string {
+				return dockerfile.RewriteFile(content, pf.dockerInsts, digests)
+			}
 		}
+		applyFile(pf, buildDigestMap(refs, digestMap, runUpdate), rewriteFn, dryRun)
 	}
 	return nil
 }
@@ -184,35 +196,10 @@ func resolveParallel(ctx context.Context, res resolver.DigestResolver, refs []st
 	return results
 }
 
-func applyDockerfile(pf parsedFile, digestMap map[string]string, dryRun bool, update bool) {
+// buildDigestMap builds a map[int]string of index→digest for refs that need rewriting.
+func buildDigestMap(refs []imageReference, digestMap map[string]string, update bool) map[int]string {
 	digests := make(map[int]string)
-	for i, inst := range pf.dockerInsts {
-		if inst.Skip || (inst.Digest != "" && !update) {
-			continue
-		}
-		if d, ok := digestMap[inst.ImageRef]; ok {
-			digests[i] = d
-		}
-	}
-	if len(digests) == 0 {
-		return
-	}
-	result := dockerfile.RewriteFile(string(pf.content), pf.dockerInsts, digests)
-	if dryRun {
-		fmt.Printf("--- %s\n", pf.path)
-		fmt.Print(result)
-		return
-	}
-	if err := os.WriteFile(pf.path, []byte(result), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "error writing %s: %v\n", pf.path, err)
-		return
-	}
-	fmt.Printf("pinned %d image(s) in %s\n", len(digests), pf.path)
-}
-
-func applyActions(pf parsedFile, digestMap map[string]string, dryRun bool, update bool) {
-	digests := make(map[int]string)
-	for i, ref := range pf.actionsRefs {
+	for i, ref := range refs {
 		if ref.Skip || (ref.Digest != "" && !update) {
 			continue
 		}
@@ -220,36 +207,15 @@ func applyActions(pf parsedFile, digestMap map[string]string, dryRun bool, updat
 			digests[i] = d
 		}
 	}
-	if len(digests) == 0 {
-		return
-	}
-	result := actions.RewriteFile(string(pf.content), pf.actionsRefs, digests)
-	if dryRun {
-		fmt.Printf("--- %s\n", pf.path)
-		fmt.Print(result)
-		return
-	}
-	if err := os.WriteFile(pf.path, []byte(result), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "error writing %s: %v\n", pf.path, err)
-		return
-	}
-	fmt.Printf("pinned %d image(s) in %s\n", len(digests), pf.path)
+	return digests
 }
 
-func applyCompose(pf parsedFile, digestMap map[string]string, dryRun bool, update bool) {
-	digests := make(map[int]string)
-	for i, ref := range pf.composeRefs {
-		if ref.Skip || (ref.Digest != "" && !update) {
-			continue
-		}
-		if d, ok := digestMap[ref.ImageRef]; ok {
-			digests[i] = d
-		}
-	}
+// applyFile rewrites a file using the provided rewrite function, then writes or prints the result.
+func applyFile(pf parsedFile, digests map[int]string, rewriteFn func(content string, digests map[int]string) string, dryRun bool) {
 	if len(digests) == 0 {
 		return
 	}
-	result := compose.RewriteFile(string(pf.content), pf.composeRefs, digests)
+	result := rewriteFn(string(pf.content), digests)
 	if dryRun {
 		fmt.Printf("--- %s\n", pf.path)
 		fmt.Print(result)
