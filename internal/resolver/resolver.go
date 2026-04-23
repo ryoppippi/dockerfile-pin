@@ -122,6 +122,29 @@ func (r *CachedResolver) Exists(ctx context.Context, imageRef string) (bool, err
 	return exists, err
 }
 
+// GetImageCreatedTime retrieves the creation time of a container image from its config.
+// Returns zero time.Time if the image config has no creation timestamp (e.g., reproducible builds).
+// This is a package-level variable so it can be replaced in tests.
+var GetImageCreatedTime = getImageCreatedTime
+
+func getImageCreatedTime(ctx context.Context, imageRef string) (time.Time, error) {
+	ref, err := name.ParseReference(imageRef)
+	if err != nil {
+		return time.Time{}, fmt.Errorf("parsing reference %q: %w", imageRef, err)
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, perRequestTimeout)
+	defer cancel()
+	img, err := remote.Image(ref, remote.WithAuthFromKeychain(authn.DefaultKeychain), remote.WithContext(reqCtx))
+	if err != nil {
+		return time.Time{}, fmt.Errorf("fetching image %q: %w", imageRef, err)
+	}
+	cfg, err := img.ConfigFile()
+	if err != nil {
+		return time.Time{}, fmt.Errorf("reading config for %q: %w", imageRef, err)
+	}
+	return cfg.Created.Time, nil
+}
+
 type MockResolver struct {
 	Digests map[string]string
 }
